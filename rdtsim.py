@@ -110,11 +110,16 @@ class EntityA:
     # zero and seqnum_limit-1, inclusive.  E.g., if seqnum_limit is 16, then
     # all seqnums must be in the range 0-15.
     def __init__(self, seqnum_limit):
+        self.seqnum_limit = seqnum_limit
+        self.window_size = seqnum_limit // 2
+        self.base = 0
         self.seqnum = 0
         self.next_seqnum = 0
         self.acknum = 0
         self.q = []
         self.in_flight = False
+
+# TODO: WATCH LECTURE AND CHECK POS 413
 
     # Called from layer 5, passed the data to be sent to other side.
     # The argument `message` is a Msg containing the data to be sent.
@@ -125,7 +130,10 @@ class EntityA:
         pkt = Pkt(self.seqnum, self.seqnum, checksum, message.data)
 
         # Advance the sequence number
-        self.seqnum = 1 - self.seqnum
+        if self.seqnum == (self.seqnum_limit - 1):
+            self.seqnum = 0
+        else:
+            self.seqnum += 1
 
         # Dump onto the wire or q the packet created
         self.q.append(pkt)
@@ -135,44 +143,40 @@ class EntityA:
     # Sends a packet to entity B over layer 3 and sets it in flight
     def transmit(self):
         self.in_flight = True
-        start_timer(self, 18)
-        if len(self.q) > 0:
-            to_layer3(self, self.q[0])
-        else:
-            to_layer3(self, self.last_pkt)
+        #start_timer(self, 18)
+        if len(self.q) > self.base:
+            # if TRACE > 0:
+            #     print (self.base)
+            to_layer3(self, self.q[self.base])
+
 
     # Called from layer 3, when a packet arrives for layer 4 at EntityA.
     # The argument `packet` is a Pkt containing the newly arrived packet.
     def input(self, packet):
 
         # Stop the timeout from triggering
-        stop_timer(self)
+        #stop_timer(self)
 
         # Compute the checksum and check the sequence number and ack
         checksum = self.next_seqnum + self.acknum + sum(packet.payload)
-        if self.acknum == packet.acknum and self.next_seqnum == packet.seqnum and self.q[0].checksum == checksum:
+        if self.acknum == packet.acknum and self.next_seqnum == packet.seqnum and self.q[self.base].checksum == checksum:
             self.in_flight = False
-            self.acknum = 1 - self.acknum
-            self.next_seqnum = 1 - self.next_seqnum
-            if TRACE > 0:
-                print("Entity A - Acknowledged Packet sequence number: " + str(self.acknum))
-
-            # Packet was delivered, pop the Q and transmit the next
-            if len(self.q) > 0:
-                self.last_pkt = self.q.pop(0)
-            if len(self.q) > 0:
-                self.transmit()
+            if (self.acknum == (self.next_seqnum - 1)) and (self.next_seqnum == (self.seqnum_limit - 1)):
+                self.acknum = 0
+                self.next_seqnum = 0
+            else:
+                self.acknum += 1
+                self.next_seqnum += 1
+            # Packet was delivered, increase base and transmit the next
+            self.base += 1
+            self.transmit()
 
         # Otherwise, the packet needs to be retransmitted
         else:
-            if TRACE > 0:
-                print("Entity A - Packet Corrupted, need Acknowledgement number: " + str(self.acknum))
             self.transmit()
 
     # Called when A's timer goes off. Retransmit a lost packet
     def timer_interrupt(self):
-        if TRACE > 0:
-            print("Entity A - Packet Timed Out, retransmitting for Acknowledgement number: " + str(self.acknum))
         self.transmit()
 
 
@@ -182,7 +186,9 @@ class EntityB:
     #
     # See comment for the meaning of seqnum_limit.
     def __init__(self, seqnum_limit):
-        self.seqnum = 0
+        self.seqnum_limit = seqnum_limit
+        self.most_recent_valid_pkt = None
+        self.expected_seqnum = 0
         self.acknum = 0
 
     # Called from layer 3, when a packet arrives for layer 4 at EntityB.
@@ -190,26 +196,31 @@ class EntityB:
     def input(self, packet):
 
         # Compute the checksum and check the sequence number and ack
-        checksum = self.seqnum + self.acknum + sum(packet.payload)
-        if packet.seqnum == self.seqnum and packet.acknum == self.acknum and packet.checksum == checksum:
+        checksum = self.expected_seqnum + self.acknum + sum(packet.payload)
+        if packet.seqnum == self.expected_seqnum and packet.acknum == self.acknum and packet.checksum == checksum:
 
             # The packet is good, send it to the network, send ack to entity A
             to_layer5(self, Msg(packet.payload))
-            pkt = Pkt(self.seqnum, self.acknum, checksum, packet.payload)
-            to_layer3(self, pkt)
-            if TRACE > 0:
-                print("Entity B - Acknowledged Packet sequence number: " + str(self.acknum))
+            to_layer3(self, packet)
 
-            # Advance the sequence number and use it as an acknum
-            self.seqnum = 1 - self.seqnum
-            self.acknum = 1 - self.acknum
+            # Advance the sequence number or set back the sequence, store the most recent valid PKT.
+            self.most_recent_valid_pkt = packet
+            if packet.seqnum == (self.seqnum_limit - 1) and packet.acknum == (self.seqnum_limit - 1):
+                self.expected_seqnum = 0
+                self.acknum = 0
+            else:
+                self.expected_seqnum += 1
+                self.acknum += 1
 
         # Resend the packet intended to be received
         else:
-            if TRACE > 0:
-                print("Entity B - Packet corrupted, sending request for sequence number: " + str(self.acknum))
-            pkt = Pkt(1 - self.seqnum, 1 - self.seqnum, checksum, packet.payload)
-            to_layer3(self, pkt)
+            if self.most_recent_valid_pkt is None:
+                pkt = Pkt(999, 999, checksum, packet.payload)
+                if TRACE > 0:
+                    print("FIRST PACKET RETRANSMITTED")
+                to_layer3(self, pkt)
+            else:
+                to_layer3(self, self.most_recent_valid_pkt)
 
     # Called when B's timer goes off.
     def timer_interrupt(self):

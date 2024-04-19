@@ -115,7 +115,6 @@ class EntityA:
         self.base = 0
         self.seqnum = 0
         self.next_seqnum = 0
-        self.acknum = 0
         self.q = []
         self.in_flight = False
 
@@ -126,23 +125,16 @@ class EntityA:
     def output(self, message):
 
         # Create packet with the seqnum, acknum, checksum, and message data.
-        checksum = self.seqnum + self.seqnum + sum(message.data)
-        pkt = Pkt(self.seqnum, self.seqnum, checksum, message.data)
-
-        # Advance the sequence number
-        if self.seqnum == (self.seqnum_limit - 1):
-            self.seqnum = 0
-        else:
-            self.seqnum += 1
-
-        # Dump onto the wire or q the packet created
+        mod_seqnum = self.seqnum % self.seqnum_limit
+        checksum = mod_seqnum + mod_seqnum + sum(message.data)
+        pkt = Pkt(mod_seqnum, mod_seqnum, checksum, message.data)
+        # Advance the sequence number and transmit
+        self.seqnum += 1
         self.q.append(pkt)
-        if not self.in_flight:
-            self.transmit()
+        self.transmit()
 
     # Sends a packet to entity B over layer 3 and sets it in flight
     def transmit(self):
-        self.in_flight = True
         #start_timer(self, 18)
         if len(self.q) > self.base:
             # if TRACE > 0:
@@ -153,27 +145,18 @@ class EntityA:
     # Called from layer 3, when a packet arrives for layer 4 at EntityA.
     # The argument `packet` is a Pkt containing the newly arrived packet.
     def input(self, packet):
-
         # Stop the timeout from triggering
         #stop_timer(self)
-
         # Compute the checksum and check the sequence number and ack
-        checksum = self.next_seqnum + self.acknum + sum(packet.payload)
-        if self.acknum == packet.acknum and self.next_seqnum == packet.seqnum and self.q[self.base].checksum == checksum:
-            self.in_flight = False
-            if (self.acknum == (self.next_seqnum - 1)) and (self.next_seqnum == (self.seqnum_limit - 1)):
-                self.acknum = 0
-                self.next_seqnum = 0
-            else:
-                self.acknum += 1
-                self.next_seqnum += 1
-            # Packet was delivered, increase base and transmit the next
+        mod_seqnum = self.next_seqnum % self.seqnum_limit
+        checksum = mod_seqnum + mod_seqnum + sum(packet.payload)
+        if mod_seqnum == packet.acknum and mod_seqnum == packet.seqnum and self.q[self.base].checksum == checksum:
+            # Packet is good, increase base and next expected seqnum
+            self.next_seqnum += 1
             self.base += 1
-            self.transmit()
+        # Retransmit either next or same pkt
+        self.transmit()
 
-        # Otherwise, the packet needs to be retransmitted
-        else:
-            self.transmit()
 
     # Called when A's timer goes off. Retransmit a lost packet
     def timer_interrupt(self):
@@ -187,40 +170,26 @@ class EntityB:
     # See comment for the meaning of seqnum_limit.
     def __init__(self, seqnum_limit):
         self.seqnum_limit = seqnum_limit
-        self.most_recent_valid_pkt = None
+        self.most_recent_valid_pkt = Pkt(999, 999, 0, "01234567890123456789")
         self.expected_seqnum = 0
-        self.acknum = 0
 
     # Called from layer 3, when a packet arrives for layer 4 at EntityB.
     # The argument `packet` is a Pkt containing the newly arrived packet.
     def input(self, packet):
 
         # Compute the checksum and check the sequence number and ack
-        checksum = self.expected_seqnum + self.acknum + sum(packet.payload)
-        if packet.seqnum == self.expected_seqnum and packet.acknum == self.acknum and packet.checksum == checksum:
-
+        mod_seqnum = self.expected_seqnum % self.seqnum_limit
+        checksum = mod_seqnum + mod_seqnum + sum(packet.payload)
+        if packet.seqnum == mod_seqnum and packet.acknum == mod_seqnum and packet.checksum == checksum:
             # The packet is good, send it to the network, send ack to entity A
             to_layer5(self, Msg(packet.payload))
             to_layer3(self, packet)
-
             # Advance the sequence number or set back the sequence, store the most recent valid PKT.
             self.most_recent_valid_pkt = packet
-            if packet.seqnum == (self.seqnum_limit - 1) and packet.acknum == (self.seqnum_limit - 1):
-                self.expected_seqnum = 0
-                self.acknum = 0
-            else:
-                self.expected_seqnum += 1
-                self.acknum += 1
-
+            self.expected_seqnum += 1
         # Resend the packet intended to be received
         else:
-            if self.most_recent_valid_pkt is None:
-                pkt = Pkt(999, 999, checksum, packet.payload)
-                if TRACE > 0:
-                    print("FIRST PACKET RETRANSMITTED")
-                to_layer3(self, pkt)
-            else:
-                to_layer3(self, self.most_recent_valid_pkt)
+            to_layer3(self, self.most_recent_valid_pkt)
 
     # Called when B's timer goes off.
     def timer_interrupt(self):

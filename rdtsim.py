@@ -102,96 +102,76 @@ class Pkt:
 ## ****************************************************************************
 
 class EntityA:
-    # The following method will be called once (only) before any other
-    # EntityA methods are called.  You can use it to do any initialization.
-    #
-    # seqnum_limit is "the number of distinct seqnum values that your protocol
-    # may use."  The seqnums and acknums in all layer3 Pkts must be between
-    # zero and seqnum_limit-1, inclusive.  E.g., if seqnum_limit is 16, then
-    # all seqnums must be in the range 0-15.
+
     def __init__(self, seqnum_limit):
         self.seqnum_limit = seqnum_limit
         self.window_size = seqnum_limit // 2
-        self.base = 0
-        self.seqnum = 0
+        self.last_pkt = None
         self.next_seqnum = 0
+        self.build_seqnum = 0
         self.q = []
-        self.in_flight = False
+        self.base = 0
 
-# TODO: WATCH LECTURE AND CHECK POS 413
-
-    # Called from layer 5, passed the data to be sent to other side.
-    # The argument `message` is a Msg containing the data to be sent.
     def output(self, message):
 
-        # Create packet with the seqnum, acknum, checksum, and message data.
-        mod_seqnum = self.seqnum % self.seqnum_limit
-        checksum = mod_seqnum + mod_seqnum + sum(message.data)
-        pkt = Pkt(mod_seqnum, mod_seqnum, checksum, message.data)
-        # Advance the sequence number and transmit
-        self.seqnum += 1
+        # Produce the proper seqnum and checksum
+        wrapped_seqnum = self.build_seqnum % self.seqnum_limit
+        checksum = wrapped_seqnum + wrapped_seqnum + sum(message.data)
+        pkt = Pkt(wrapped_seqnum, wrapped_seqnum, checksum, message.data)
+
+        # BUILD SEQNUM INCREASES
+        self.build_seqnum += 1
+
+        # Append the pkt and send it
         self.q.append(pkt)
         self.transmit()
 
-    # Sends a packet to entity B over layer 3 and sets it in flight
     def transmit(self):
-        #start_timer(self, 18)
-        if len(self.q) > self.base:
-            # if TRACE > 0:
-            #     print (self.base)
+        start_timer(self, 30)
+        while (self.next_seqnum < self.base + self.window_size) and (self.next_seqnum < len(self.q)):
             to_layer3(self, self.q[self.base])
-
-
-    # Called from layer 3, when a packet arrives for layer 4 at EntityA.
-    # The argument `packet` is a Pkt containing the newly arrived packet.
-    def input(self, packet):
-        # Stop the timeout from triggering
-        #stop_timer(self)
-        # Compute the checksum and check the sequence number and ack
-        mod_seqnum = self.next_seqnum % self.seqnum_limit
-        checksum = mod_seqnum + mod_seqnum + sum(packet.payload)
-        if mod_seqnum == packet.acknum and mod_seqnum == packet.seqnum and self.q[self.base].checksum == checksum:
-            # Packet is good, increase base and next expected seqnum
+            # WHEN TRANSMITTING, INCREASE NEXT SEQNUM
             self.next_seqnum += 1
-            self.base += 1
-        # Retransmit either next or same pkt
-        self.transmit()
 
+    def input(self, packet):
+        # Loop base to base + window size to find the packet with matching seqnum that matches received pkt,
+        # otherwise it'll get dumped bc corrupted...
+        for i in range(self.base, self.base + self.window_size):
+            if i >= len(self.q):
+                break
+            if self.q[i].checksum == packet.checksum and self.q[i].seqnum == packet.acknum:
+                stop_timer(self)
+                # BASE MOVES ONLY WITH ACK, needs to increase to recv pkt index + 1.
+                self.base = i + 1
+                if self.base < len(self.q):
+                    self.transmit()
 
-    # Called when A's timer goes off. Retransmit a lost packet
     def timer_interrupt(self):
-        self.transmit()
+        start_timer(self, 30)
+        # Resend all packets from base to base + window size
+        for i in range(self.base, self.base + self.window_size):
+            if i >= len(self.q):
+                break
+            to_layer3(self, self.q[i])
 
 
 class EntityB:
-    # The following method will be called once (only) before any other
-    # EntityB methods are called.  You can use it to do any initialization.
-    #
-    # See comment for the meaning of seqnum_limit.
+
     def __init__(self, seqnum_limit):
         self.seqnum_limit = seqnum_limit
-        self.most_recent_valid_pkt = Pkt(999, 999, 0, "01234567890123456789")
+        self.last_pkt = Pkt(999, 999, 2018, "01234567890123456789")
         self.expected_seqnum = 0
 
-    # Called from layer 3, when a packet arrives for layer 4 at EntityB.
-    # The argument `packet` is a Pkt containing the newly arrived packet.
     def input(self, packet):
-
-        # Compute the checksum and check the sequence number and ack
-        mod_seqnum = self.expected_seqnum % self.seqnum_limit
-        checksum = mod_seqnum + mod_seqnum + sum(packet.payload)
-        if packet.seqnum == mod_seqnum and packet.acknum == mod_seqnum and packet.checksum == checksum:
-            # The packet is good, send it to the network, send ack to entity A
+        checksum = packet.seqnum + packet.acknum + sum(packet.payload)
+        if packet.seqnum == self.expected_seqnum and packet.checksum == checksum:
             to_layer5(self, Msg(packet.payload))
             to_layer3(self, packet)
-            # Advance the sequence number or set back the sequence, store the most recent valid PKT.
-            self.most_recent_valid_pkt = packet
-            self.expected_seqnum += 1
-        # Resend the packet intended to be received
+            self.last_pkt = packet
+            self.expected_seqnum = (self.expected_seqnum + 1) % self.seqnum_limit
         else:
-            to_layer3(self, self.most_recent_valid_pkt)
+            to_layer3(self, self.last_pkt)
 
-    # Called when B's timer goes off.
     def timer_interrupt(self):
         pass
 

@@ -106,48 +106,38 @@ class EntityA:
     def __init__(self, seqnum_limit):
         self.seqnum_limit = seqnum_limit
         self.window_size = seqnum_limit // 2
-        self.last_pkt = None
         self.next_seqnum = 0
         self.build_seqnum = 0
         self.q = []
         self.base = 0
 
     def output(self, message):
-
-        # Produce the proper seqnum and checksum
         wrapped_seqnum = self.build_seqnum % self.seqnum_limit
         checksum = wrapped_seqnum + wrapped_seqnum + sum(message.data)
         pkt = Pkt(wrapped_seqnum, wrapped_seqnum, checksum, message.data)
-
-        # BUILD SEQNUM INCREASES
         self.build_seqnum += 1
-
-        # Append the pkt and send it
         self.q.append(pkt)
         self.transmit()
 
     def transmit(self):
-        start_timer(self, 30)
         while (self.next_seqnum < self.base + self.window_size) and (self.next_seqnum < len(self.q)):
-            to_layer3(self, self.q[self.base])
-            # WHEN TRANSMITTING, INCREASE NEXT SEQNUM
+            to_layer3(self, self.q[self.next_seqnum])
+            if self.base == self.next_seqnum:
+                start_timer(self, 10 + 12 * self.window_size)
             self.next_seqnum += 1
 
     def input(self, packet):
-        # Loop base to base + window size to find the packet with matching seqnum that matches received pkt,
-        # otherwise it'll get dumped bc corrupted...
         for i in range(self.base, self.base + self.window_size):
             if i >= len(self.q):
                 break
             if self.q[i].checksum == packet.checksum and self.q[i].seqnum == packet.acknum:
-                stop_timer(self)
-                # BASE MOVES ONLY WITH ACK, needs to increase to recv pkt index + 1.
                 self.base = i + 1
-                if self.base < len(self.q):
-                    self.transmit()
+                if self.base == self.next_seqnum:
+                    stop_timer(self)
+        self.transmit()
 
     def timer_interrupt(self):
-        start_timer(self, 30)
+        start_timer(self, 10 + 12 * self.window_size)
         # Resend all packets from base to base + window size
         for i in range(self.base, self.base + self.window_size):
             if i >= len(self.q):

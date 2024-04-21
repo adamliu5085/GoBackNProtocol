@@ -112,33 +112,51 @@ class EntityA:
         self.base = 0
 
     def output(self, message):
+
+        # Create a packet with the proper sequence number
         wrapped_seqnum = self.build_seqnum % self.seqnum_limit
         checksum = wrapped_seqnum + wrapped_seqnum + sum(message.data)
         pkt = Pkt(wrapped_seqnum, wrapped_seqnum, checksum, message.data)
+
+        # Add the packet to the queue and transmit the window
         self.build_seqnum += 1
         self.q.append(pkt)
         self.transmit()
 
     def transmit(self):
+
+        # Continuously loop over the window and send out packets
         while (self.next_seqnum < self.base + self.window_size) and (self.next_seqnum < len(self.q)):
             to_layer3(self, self.q[self.next_seqnum])
+
+            # Start the timer and increase the sequence number
             if self.base == self.next_seqnum:
-                start_timer(self, 10 + 12 * self.window_size)
+                start_timer(self, 10 + 4 * self.window_size)
             self.next_seqnum += 1
 
     def input(self, packet):
+
+        # Loop over all packets in the window and compare to the received packet
         for i in range(self.base, self.base + self.window_size):
             if i >= len(self.q):
                 break
+
+            # If the packet is valid, increase the base and stop or reset the timer
             if self.q[i].checksum == packet.checksum and self.q[i].seqnum == packet.acknum:
                 self.base = i + 1
                 if self.base == self.next_seqnum:
                     stop_timer(self)
+                else:
+                    stop_timer(self)
+                    start_timer(self, 10 + 4 * self.window_size)
+
+        # Transmit the next window of packets
         self.transmit()
 
     def timer_interrupt(self):
-        start_timer(self, 10 + 12 * self.window_size)
+
         # Resend all packets from base to base + window size
+        start_timer(self, 10 + 4 * self.window_size)
         for i in range(self.base, self.base + self.window_size):
             if i >= len(self.q):
                 break
@@ -153,12 +171,20 @@ class EntityB:
         self.expected_seqnum = 0
 
     def input(self, packet):
+
+        # Calculate the expected checksum and compare the seqnum of the input
         checksum = packet.seqnum + packet.acknum + sum(packet.payload)
         if packet.seqnum == self.expected_seqnum and packet.checksum == checksum:
+
+            # Send the packet off and acknowledge to entity A
             to_layer5(self, Msg(packet.payload))
             to_layer3(self, packet)
+
+            # Save the most recent valid packet
             self.last_pkt = packet
             self.expected_seqnum = (self.expected_seqnum + 1) % self.seqnum_limit
+
+        # Otherwise send back the most recent valid acknowledged packet
         else:
             to_layer3(self, self.last_pkt)
 

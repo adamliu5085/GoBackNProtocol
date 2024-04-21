@@ -124,7 +124,8 @@ class EntityA:
         self.transmit()
 
     def transmit(self):
-
+        # if TRACE > 0:
+        #     print("Transmitting packets with base: "+ str(self.base) + ", With window size: " + str(self.window_size))
         # Continuously loop over the window and send out packets
         while (self.next_seqnum < self.base + self.window_size) and (self.next_seqnum < len(self.q)):
             to_layer3(self, self.q[self.next_seqnum])
@@ -137,12 +138,16 @@ class EntityA:
     def input(self, packet):
 
         # Loop over all packets in the window and compare to the received packet
+        # if TRACE > 0:
+        #     print("Packet received, checking window from base: "+ str(self.base) + ", With window size: " + str(self.window_size))
         for i in range(self.base, self.base + self.window_size):
             if i >= len(self.q):
                 break
 
             # If the packet is valid, increase the base and stop or reset the timer
             if self.q[i].checksum == packet.checksum and self.q[i].seqnum == packet.acknum:
+                # if TRACE > 0:
+                #     print("Packet with sequence number: " + str(packet.seqnum) + " acknowledged at Entity A")
                 self.base = i + 1
                 if self.base == self.next_seqnum:
                     stop_timer(self)
@@ -154,7 +159,8 @@ class EntityA:
         self.transmit()
 
     def timer_interrupt(self):
-
+        # if TRACE > 0:
+        #     print("Timeout occurred, resending window from base: "+ str(self.base) + ", With window size: " + str(self.window_size))
         # Resend all packets from base to base + window size
         start_timer(self, 10 + 4 * self.window_size)
         for i in range(self.base, self.base + self.window_size):
@@ -175,7 +181,8 @@ class EntityB:
         # Calculate the expected checksum and compare the seqnum of the input
         checksum = packet.seqnum + packet.acknum + sum(packet.payload)
         if packet.seqnum == self.expected_seqnum and packet.checksum == checksum:
-
+            # if TRACE > 0:
+            #     print("Packet with sequence number: " + str(packet.seqnum) + " acknowledged at Entity B")
             # Send the packet off and acknowledge to entity A
             to_layer5(self, Msg(packet.payload))
             to_layer3(self, packet)
@@ -186,6 +193,8 @@ class EntityB:
 
         # Otherwise send back the most recent valid acknowledged packet
         else:
+            # if TRACE > 0:
+            #     print("Packet corrupted at Entity B, sending back acknowledgement: " + str(self.last_pkt.seqnum))
             to_layer3(self, self.last_pkt)
 
     def timer_interrupt(self):
